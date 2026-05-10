@@ -9,6 +9,7 @@ from gbp_api import get_accounts, get_locations, get_reviews
 from report import build_weekly_report
 
 
+@st.cache_data
 def load_config() -> dict:
     with open("config.yaml") as f:
         return yaml.safe_load(f)
@@ -26,7 +27,6 @@ def show_report(config: dict) -> None:
 
     st.title(config["ui"]["app_title"])
 
-    # ── Sidebar ────────────────────────────────────────────────────────────────
     with st.sidebar:
         st.header("Report Settings")
         months_back = st.number_input(
@@ -38,11 +38,9 @@ def show_report(config: dict) -> None:
         )
         st.divider()
         if st.button("Sign out"):
-            for key in ["credentials", "accounts", "locations", "oauth_state"]:
-                st.session_state.pop(key, None)
+            st.session_state.clear()
             st.rerun()
 
-    # ── Account picker ─────────────────────────────────────────────────────────
     if "accounts" not in st.session_state:
         with st.spinner("Loading accounts…"):
             try:
@@ -59,10 +57,9 @@ def show_report(config: dict) -> None:
         return
 
     account_map = {a.get("accountName", a["name"]): a["name"] for a in accounts}
-    selected_account_label = st.selectbox("Account", list(account_map.keys()))
+    selected_account_label = st.selectbox("Account", account_map)
     selected_account = account_map[selected_account_label]
 
-    # ── Location picker ────────────────────────────────────────────────────────
     location_key = f"locations_{selected_account}"
     if location_key not in st.session_state:
         with st.spinner("Loading locations…"):
@@ -82,13 +79,12 @@ def show_report(config: dict) -> None:
         return
 
     location_map = {loc.get("title", loc["name"]): loc["name"] for loc in locations}
-    selected_location_label = st.selectbox("Location", list(location_map.keys()))
+    selected_location_label = st.selectbox("Location", location_map)
     selected_location = location_map[selected_location_label]
 
-    # ── Generate ───────────────────────────────────────────────────────────────
     if st.button("Generate Report", type="primary"):
         end_date = date.today()
-        start_date = end_date - relativedelta(months=int(months_back))
+        start_date = end_date - relativedelta(months=months_back)
 
         with st.spinner("Fetching reviews…"):
             try:
@@ -109,19 +105,14 @@ def show_report(config: dict) -> None:
             st.info("No reviews found in this date range.")
             return
 
-        overall_avg = (
-            df.loc[df["review_count"] > 0, "avg_rating"]
-            .mean()
-        )
+        overall_avg = df.loc[df["review_count"] > 0, "avg_rating"].mean()
 
-        # ── KPI row ────────────────────────────────────────────────────────────
         k1, k2 = st.columns(2)
         k1.metric("Total Reviews", total_reviews)
         k2.metric("Overall Avg Rating", f"{overall_avg:.2f} ⭐")
 
         st.divider()
 
-        # ── Charts ─────────────────────────────────────────────────────────────
         c1, c2 = st.columns(2)
 
         with c1:
@@ -159,13 +150,17 @@ def show_report(config: dict) -> None:
             )
             st.plotly_chart(fig_line, use_container_width=True)
 
-        # ── Table ──────────────────────────────────────────────────────────────
         st.subheader("Weekly Detail")
-        display = df.copy()
-        display["week_start"] = display["week_start"].dt.strftime("%Y-%m-%d")
-        display["avg_rating"] = display["avg_rating"].round(2)
-        display.columns = ["Week Starting", "# Reviews", "Avg Rating"]
-        st.dataframe(display, use_container_width=True, hide_index=True)
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "week_start": st.column_config.DateColumn("Week Starting", format="YYYY-MM-DD"),
+                "review_count": st.column_config.NumberColumn("# Reviews"),
+                "avg_rating": st.column_config.NumberColumn("Avg Rating", format="%.2f"),
+            },
+        )
 
 
 def main() -> None:
@@ -176,7 +171,6 @@ def main() -> None:
         layout="wide",
     )
 
-    # ── Handle OAuth callback ──────────────────────────────────────────────────
     params = st.query_params
     if "code" in params and "credentials" not in st.session_state:
         try:

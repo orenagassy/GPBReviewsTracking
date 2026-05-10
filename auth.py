@@ -39,6 +39,8 @@ def get_auth_url() -> str:
 def exchange_code(code: str, state: str) -> str:
     """Exchange OAuth authorization code for credentials. Returns credentials JSON."""
     stored_state = st.session_state.get("oauth_state")
+    if stored_state and state != stored_state:
+        raise ValueError("OAuth state mismatch — possible CSRF attempt")
     flow = Flow.from_client_config(
         _client_config(),
         scopes=SCOPES,
