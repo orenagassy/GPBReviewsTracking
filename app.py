@@ -11,7 +11,7 @@ from report import build_weekly_report
 
 @st.cache_data
 def load_config() -> dict:
-    with open("config.yaml") as f:
+    with open("config.yaml", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
