@@ -49,6 +49,9 @@ def show_report(config: dict, cookie_manager) -> None:
         if st.button("Sign out"):
             cookie_manager.delete(_CREDENTIALS_COOKIE)
             st.session_state.clear()
+            # Prevent the cookie restore from immediately re-logging in
+            # during this rerun while the async JS delete may not have landed yet.
+            st.session_state["_signed_out"] = True
             st.rerun()
 
     if "accounts" not in st.session_state:
@@ -189,27 +192,41 @@ def main() -> None:
         layout="wide",
     )
 
-    # Capture auth code into session_state BEFORE any component initializes.
-    # CookieManager triggers a Streamlit rerender on startup; if the code is
-    # still in the URL at that point it would be submitted to Google twice,
-    # causing an invalid_grant error (codes are single-use).
+    # Capture auth code into local vars and clear the URL BEFORE any component
+    # initialises. CookieManager triggers a Streamlit rerender; if ?code= is
+    # still in the URL during that rerender it would be submitted to Google a
+    # second time, causing invalid_grant (codes are single-use).
+    # Must capture to local vars BEFORE st.query_params.clear() — the params
+    # object is a live proxy and is empty after clear().
     params = st.query_params
     if "code" in params and "pending_code" not in st.session_state and "credentials" not in st.session_state:
-        st.session_state["pending_code"] = params["code"]
-        st.session_state["pending_state"] = params.get("state", "")
+        captured_code = params["code"]
+        captured_state = params.get("state", "")
         st.query_params.clear()
-        _dbg(f"Auth code captured from URL: {params['code'][:20]}…", config)
+        st.session_state["pending_code"] = captured_code
+        st.session_state["pending_state"] = captured_state
+        _dbg(f"Auth code captured from URL: {captured_code[:20]}…", config)
 
     cookie_manager = stx.CookieManager(key="gbp_cookie_mgr")
 
-    # Restore credentials from persistent cookie when session is fresh
-    if "credentials" not in st.session_state and "pending_code" not in st.session_state:
+    # Restore credentials from persistent cookie when session is fresh.
+    # Skipped when the user just signed out (_signed_out flag) to prevent
+    # restoring before the async cookie-delete JS has landed in the browser.
+    if (
+        "credentials" not in st.session_state
+        and "pending_code" not in st.session_state
+        and not st.session_state.get("_signed_out")
+    ):
         saved = cookie_manager.get(_CREDENTIALS_COOKIE)
         if saved:
             st.session_state["credentials"] = saved
             _dbg("Restored credentials from browser cookie", config)
 
-    # Exchange the pending code (popped so it can never be submitted twice)
+    # Clear the sign-out guard after one render (by this point the browser
+    # cookie delete has landed, so future page loads can restore normally).
+    st.session_state.pop("_signed_out", None)
+
+    # Exchange the pending code — popped so it can never be submitted twice.
     if "pending_code" in st.session_state and "credentials" not in st.session_state:
         code = st.session_state.pop("pending_code")
         state = st.session_state.pop("pending_state", "")
@@ -228,7 +245,7 @@ def main() -> None:
             st.error(f"Authentication failed: {exc}")
             if config.get("debug_mode"):
                 st.exception(exc)
-            # No rerun — let the user see the error
+            # No rerun — keep the error visible
 
     if "credentials" not in st.session_state:
         show_login(config)
