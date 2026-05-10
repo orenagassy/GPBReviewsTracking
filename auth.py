@@ -40,12 +40,13 @@ def exchange_code(code: str, state: str) -> str:
     """Exchange OAuth authorization code for credentials. Returns credentials JSON."""
     stored_state = st.session_state.get("oauth_state")
     if stored_state and state != stored_state:
-        raise ValueError("OAuth state mismatch — possible CSRF attempt")
-    flow = Flow.from_client_config(
-        _client_config(),
-        scopes=SCOPES,
-        state=stored_state,
-    )
+        raise ValueError(
+            f"OAuth state mismatch — stored={stored_state!r}, received={state!r}"
+        )
+    # Do not pass state= to Flow; we validate it above. Passing it triggers an
+    # internal requests-oauthlib check that fails when session_state is fresh
+    # after a page reload from Google's redirect.
+    flow = Flow.from_client_config(_client_config(), scopes=SCOPES)
     flow.redirect_uri = st.secrets["google"]["redirect_uri"]
     flow.fetch_token(code=code)
     return flow.credentials.to_json()

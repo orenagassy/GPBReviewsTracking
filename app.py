@@ -1,12 +1,16 @@
 import yaml
 import streamlit as st
 import plotly.graph_objects as go
-from datetime import date
+import extra_streamlit_components as stx
+from datetime import date, datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
 from auth import get_auth_url, exchange_code
 from gbp_api import get_accounts, get_locations, get_reviews
 from report import build_weekly_report
+
+_CREDENTIALS_COOKIE = "gbp_creds"
+_COOKIE_DAYS = 30
 
 
 @st.cache_data
@@ -15,13 +19,18 @@ def load_config() -> dict:
         return yaml.safe_load(f)
 
 
+def _dbg(msg: str, config: dict) -> None:
+    if config.get("debug_mode"):
+        st.info(f"🔍 {msg}")
+
+
 def show_login(config: dict) -> None:
     st.title(config["ui"]["app_title"])
     st.write(config["ui"]["signin_message"])
     st.link_button("Sign in with Google", get_auth_url(), type="primary")
 
 
-def show_report(config: dict) -> None:
+def show_report(config: dict, cookie_manager) -> None:
     cfg_report = config["report"]
     cfg_charts = config["charts"]
 
@@ -38,6 +47,7 @@ def show_report(config: dict) -> None:
         )
         st.divider()
         if st.button("Sign out"):
+            cookie_manager.delete(_CREDENTIALS_COOKIE)
             st.session_state.clear()
             st.rerun()
 
@@ -49,6 +59,8 @@ def show_report(config: dict) -> None:
                 st.session_state["accounts"] = accounts
             except Exception as exc:
                 st.error(f"Failed to load accounts: {exc}")
+                if config.get("debug_mode"):
+                    st.exception(exc)
                 return
 
     accounts = st.session_state["accounts"]
@@ -71,6 +83,8 @@ def show_report(config: dict) -> None:
                 st.session_state[location_key] = locations
             except Exception as exc:
                 st.error(f"Failed to load locations: {exc}")
+                if config.get("debug_mode"):
+                    st.exception(exc)
                 return
 
     locations = st.session_state[location_key]
@@ -96,7 +110,11 @@ def show_report(config: dict) -> None:
                 st.session_state["credentials"] = creds_json
             except Exception as exc:
                 st.error(f"Failed to fetch reviews: {exc}")
+                if config.get("debug_mode"):
+                    st.exception(exc)
                 return
+
+        _dbg(f"Fetched {len(reviews)} total reviews; filtering {start_date} → {end_date}", config)
 
         df = build_weekly_report(reviews, start_date, end_date)
 
@@ -171,21 +189,46 @@ def main() -> None:
         layout="wide",
     )
 
+    cookie_manager = stx.CookieManager(key="gbp_cookie_mgr")
+
+    # Restore credentials from persistent cookie when session is fresh
+    if "credentials" not in st.session_state:
+        saved = cookie_manager.get(_CREDENTIALS_COOKIE)
+        if saved:
+            st.session_state["credentials"] = saved
+            _dbg("Restored credentials from browser cookie", config)
+
+    # Handle OAuth callback from Google redirect
     params = st.query_params
     if "code" in params and "credentials" not in st.session_state:
+        _dbg(
+            f"OAuth callback received — "
+            f"code={params['code'][:20]}… "
+            f"state={params.get('state', '')[:20]}…",
+            config,
+        )
         try:
             creds_json = exchange_code(params["code"], params.get("state", ""))
             st.session_state["credentials"] = creds_json
+            cookie_manager.set(
+                _CREDENTIALS_COOKIE,
+                creds_json,
+                expires_at=datetime.now() + timedelta(days=_COOKIE_DAYS),
+            )
+            _dbg("Token exchange successful — credentials saved to session and cookie", config)
+            st.query_params.clear()
+            st.rerun()  # Only reached on success
         except Exception as exc:
             st.error(f"Authentication failed: {exc}")
-        finally:
+            if config.get("debug_mode"):
+                st.exception(exc)
             st.query_params.clear()
-        st.rerun()
+            # No rerun — let the user see the error before going back to login
 
     if "credentials" not in st.session_state:
         show_login(config)
     else:
-        show_report(config)
+        show_report(config, cookie_manager)
 
 
 if __name__ == "__main__":

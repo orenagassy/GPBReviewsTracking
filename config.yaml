@@ -11,3 +11,6 @@ ui:
   app_title: "GBP Reviews Tracker"
   app_icon: "⭐"
   signin_message: "Sign in with your Google account to view review analytics for your Google Business Profile locations."
+
+# Set to false before sharing the app with others
+debug_mode: true
