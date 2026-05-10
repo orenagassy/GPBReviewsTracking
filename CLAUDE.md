@@ -31,11 +31,13 @@ Touch only what the task requires. Match existing style. Do not refactor adjacen
 Validate at API response boundaries. Use `.get()` with defaults. Check for empty DataFrames before computing.
 
 ## GBP API Endpoints
-| Endpoint | Purpose |
-|---|---|
-| `GET https://mybusinessaccountmanagement.googleapis.com/v1/accounts` | List GBP accounts |
-| `GET https://mybusinessaccountmanagement.googleapis.com/v1/{account}/locations` | List locations |
-| `GET https://mybusinessreviews.googleapis.com/v1/{location}/reviews` | Fetch reviews (paginated) |
+| Endpoint | GCP API to enable | Purpose |
+|---|---|---|
+| `GET https://mybusinessaccountmanagement.googleapis.com/v1/accounts` | My Business Account Management API | List GBP accounts |
+| `GET https://mybusinessaccountmanagement.googleapis.com/v1/{account}/locations` | My Business Account Management API | List locations |
+| `GET https://mybusinessreviews.googleapis.com/v1/{location}/reviews` | Google Business Profile API | Fetch reviews (paginated) |
+
+> The reviews endpoint is served by `mybusinessreviews.googleapis.com` but is enabled via the umbrella **Google Business Profile API** in GCP — there is no separately-listed "My Business Reviews API".
 
 OAuth scope required: `https://www.googleapis.com/auth/business.manage`
 

@@ -21,16 +21,15 @@ This guide covers everything from creating your Google Cloud project to deployin
 
 ---
 
-## Step 2 — Enable the Business Profile API
+## Step 2 — Enable the Business Profile APIs
 
 1. In the Cloud Console, go to **APIs & Services → Library**
-2. Search for **"Business Profile API"** (also called "My Business")
-3. Enable the following APIs:
-   - **Business Profile Performance API** *(for the management APIs)*
+2. Search for **"My Business"** and enable:
    - **My Business Account Management API** *(lists accounts and locations)*
-   - **My Business Reviews API** *(fetches review data)*
+3. Search for **"Business Profile"** and enable:
+   - **Google Business Profile API** *(umbrella API that covers reviews, performance data, and more)*
 
-> **Tip:** If you search for "My Business" all relevant APIs appear together.
+> **Note:** The reviews endpoint (`mybusinessreviews.googleapis.com`) is covered by the **Google Business Profile API** — there is no separately-listed "My Business Reviews API" in the console. Enable the two APIs above and you will have access to everything this app needs.
 
 ---
 
@@ -168,7 +167,7 @@ Until verified, add each user's Google email to the **Test users** list in the c
 | `redirect_uri_mismatch` error | The `redirect_uri` in `secrets.toml` must exactly match what's in GCP Credentials (including `http` vs `https`) |
 | `Access blocked: app not verified` | Add your email to Test users in OAuth consent screen |
 | No accounts or locations appear | The signed-in Google account must be an owner/manager of at least one GBP location |
-| `403 Forbidden` on reviews API | Ensure all three Business Profile APIs are enabled in GCP |
+| `403 Forbidden` on reviews API | Ensure both APIs from Step 2 are enabled: My Business Account Management API and Google Business Profile API |
 | Token expired error | Sign out and sign back in — the app refreshes tokens automatically but may fail if the refresh token was revoked |
 
 ---
