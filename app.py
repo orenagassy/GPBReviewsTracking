@@ -1,6 +1,5 @@
 import yaml
 import streamlit as st
-import plotly.graph_objects as go
 from pathlib import Path
 from datetime import date
 from dateutil.relativedelta import relativedelta
@@ -52,6 +51,7 @@ def show_login(config: dict) -> None:
 
 
 def show_report(config: dict) -> None:
+    import plotly.graph_objects as go
     cfg_report = config["report"]
     cfg_charts = config["charts"]
 
@@ -72,6 +72,15 @@ def show_report(config: dict) -> None:
             st.session_state.clear()
             st.rerun()
 
+    if "accounts_error" in st.session_state:
+        st.error(st.session_state["accounts_error"])
+        if config.get("debug_mode"):
+            st.info("If the error says quota_limit_value '0', your GCP project has zero quota for mybusinessaccountmanagement.googleapis.com — go to GCP Console → APIs & Services → Quotas and request an increase.")
+        if st.button("Retry"):
+            del st.session_state["accounts_error"]
+            st.rerun()
+        return
+
     if "accounts" not in st.session_state:
         with st.spinner("Loading accounts…"):
             try:
@@ -80,10 +89,8 @@ def show_report(config: dict) -> None:
                 _save_creds(creds_json)
                 st.session_state["accounts"] = accounts
             except Exception as exc:
-                st.error(f"Failed to load accounts: {exc}")
-                if config.get("debug_mode"):
-                    st.exception(exc)
-                return
+                st.session_state["accounts_error"] = f"Failed to load accounts: {exc}"
+                st.rerun()
 
     accounts = st.session_state["accounts"]
     if not accounts:
@@ -95,6 +102,15 @@ def show_report(config: dict) -> None:
     selected_account = account_map[selected_account_label]
 
     location_key = f"locations_{selected_account}"
+    location_error_key = f"locations_error_{selected_account}"
+
+    if location_error_key in st.session_state:
+        st.error(st.session_state[location_error_key])
+        if st.button("Retry"):
+            del st.session_state[location_error_key]
+            st.rerun()
+        return
+
     if location_key not in st.session_state:
         with st.spinner("Loading locations…"):
             try:
@@ -105,10 +121,8 @@ def show_report(config: dict) -> None:
                 _save_creds(creds_json)
                 st.session_state[location_key] = locations
             except Exception as exc:
-                st.error(f"Failed to load locations: {exc}")
-                if config.get("debug_mode"):
-                    st.exception(exc)
-                return
+                st.session_state[location_error_key] = f"Failed to load locations: {exc}"
+                st.rerun()
 
     locations = st.session_state[location_key]
     if not locations:

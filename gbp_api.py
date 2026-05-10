@@ -10,11 +10,23 @@ def _auth_header(creds: Credentials) -> dict:
     return {"Authorization": f"Bearer {creds.token}"}
 
 
+def _raise(resp: requests.Response) -> None:
+    """Raise HTTPError with Google's error detail included in the message."""
+    if not resp.ok:
+        try:
+            detail = resp.json()
+        except Exception:
+            detail = resp.text
+        raise requests.HTTPError(
+            f"{resp.status_code} {resp.reason}: {detail}", response=resp
+        )
+
+
 def get_accounts(credentials_json: str) -> tuple[list[dict], str]:
     """Return (accounts, updated_credentials_json)."""
     creds, credentials_json = get_valid_credentials(credentials_json)
     resp = requests.get(f"{_ACCOUNT_BASE}/accounts", headers=_auth_header(creds))
-    resp.raise_for_status()
+    _raise(resp)
     return resp.json().get("accounts", []), credentials_json
 
 
@@ -25,7 +37,7 @@ def get_locations(credentials_json: str, account_name: str) -> tuple[list[dict],
         f"{_ACCOUNT_BASE}/{account_name}/locations",
         headers=_auth_header(creds),
     )
-    resp.raise_for_status()
+    _raise(resp)
     return resp.json().get("locations", []), credentials_json
 
 
@@ -47,7 +59,7 @@ def get_reviews(
             headers=_auth_header(creds),
             params=params,
         )
-        resp.raise_for_status()
+        _raise(resp)
         data = resp.json()
         reviews.extend(data.get("reviews", []))
 

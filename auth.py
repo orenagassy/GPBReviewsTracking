@@ -10,9 +10,9 @@ from google.auth.transport.requests import Request
 
 SCOPES = [
     "https://www.googleapis.com/auth/business.manage",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
     "openid",
-    "email",
-    "profile",
 ]
 
 # PKCE verifier is written here by get_auth_url() and consumed by exchange_code().
