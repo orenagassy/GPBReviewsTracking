@@ -1,7 +1,7 @@
 import base64
 import hashlib
 import json
-import os
+import secrets
 import streamlit as st
 from pathlib import Path
 from google_auth_oauthlib.flow import Flow
@@ -33,10 +33,6 @@ def _client_config() -> dict:
     }
 
 
-def _make_verifier() -> str:
-    return base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip("=")
-
-
 def _make_challenge(verifier: str) -> str:
     return base64.urlsafe_b64encode(
         hashlib.sha256(verifier.encode()).digest()
@@ -47,8 +43,14 @@ def get_auth_url() -> str:
     flow = Flow.from_client_config(_client_config(), scopes=SCOPES)
     flow.redirect_uri = st.secrets["google"]["redirect_uri"]
 
-    verifier = _make_verifier()
-    _PKCE_FILE.write_text(verifier, encoding="utf-8")
+    # Reuse the verifier if the login page rerenders — overwriting it would break
+    # any in-flight token exchange if the user has already clicked "Sign in".
+    if "oauth_verifier" not in st.session_state:
+        verifier = secrets.token_urlsafe(32)
+        st.session_state["oauth_verifier"] = verifier
+        _PKCE_FILE.write_text(verifier, encoding="utf-8")
+    else:
+        verifier = st.session_state["oauth_verifier"]
 
     auth_url, state = flow.authorization_url(
         access_type="offline",
@@ -70,9 +72,11 @@ def exchange_code(code: str, state: str) -> str:
         )
 
     verifier = None
-    if _PKCE_FILE.exists():
+    try:
         verifier = _PKCE_FILE.read_text(encoding="utf-8").strip()
-        _PKCE_FILE.unlink(missing_ok=True)
+        _PKCE_FILE.unlink()
+    except FileNotFoundError:
+        pass
 
     flow = Flow.from_client_config(_client_config(), scopes=SCOPES)
     flow.redirect_uri = st.secrets["google"]["redirect_uri"]

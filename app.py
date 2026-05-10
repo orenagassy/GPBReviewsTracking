@@ -2,7 +2,7 @@ import yaml
 import streamlit as st
 import plotly.graph_objects as go
 from pathlib import Path
-from datetime import date, datetime, timedelta
+from datetime import date
 from dateutil.relativedelta import relativedelta
 
 from auth import get_auth_url, exchange_code
@@ -26,21 +26,23 @@ def _dbg(msg: str, config: dict) -> None:
 
 
 def _save_creds(creds_json: str) -> None:
+    try:
+        if _CREDS_FILE.read_text(encoding="utf-8") == creds_json:
+            return
+    except OSError:
+        pass
     _CREDS_FILE.write_text(creds_json, encoding="utf-8")
 
 
 def _load_creds() -> str | None:
     try:
-        return _CREDS_FILE.read_text(encoding="utf-8") if _CREDS_FILE.exists() else None
+        return _CREDS_FILE.read_text(encoding="utf-8")
     except OSError:
         return None
 
 
 def _clear_creds() -> None:
-    try:
-        _CREDS_FILE.unlink(missing_ok=True)
-    except OSError:
-        pass
+    _CREDS_FILE.unlink(missing_ok=True)
 
 
 def show_login(config: dict) -> None:
@@ -211,7 +213,6 @@ def main() -> None:
         layout="wide",
     )
 
-    # ── Step 1: capture auth code from URL ─────────────────────────────────────
     # Must happen before ANYTHING else — including st.info/st.error calls —
     # so that Streamlit's own rerenders don't find the code again and
     # attempt a second exchange (codes are single-use → invalid_grant).
@@ -224,14 +225,12 @@ def main() -> None:
         st.session_state["pending_code"] = captured_code
         st.session_state["pending_state"] = captured_state
 
-    # ── Step 2: restore from file cache on fresh page load ─────────────────────
     if "credentials" not in st.session_state and "pending_code" not in st.session_state:
         saved = _load_creds()
         if saved:
             st.session_state["credentials"] = saved
             _dbg("Restored credentials from cached file", config)
 
-    # ── Step 3: exchange pending auth code ─────────────────────────────────────
     if "pending_code" in st.session_state and "credentials" not in st.session_state:
         code = st.session_state.pop("pending_code")
         state = st.session_state.pop("pending_state", "")
@@ -254,7 +253,6 @@ def main() -> None:
         # Clear after display so re-login attempt starts fresh
         del st.session_state["_auth_error"]
 
-    # ── Step 4: route to login or report ───────────────────────────────────────
     if "credentials" not in st.session_state:
         show_login(config)
     else:
