@@ -189,26 +189,33 @@ def main() -> None:
         layout="wide",
     )
 
+    # Capture auth code into session_state BEFORE any component initializes.
+    # CookieManager triggers a Streamlit rerender on startup; if the code is
+    # still in the URL at that point it would be submitted to Google twice,
+    # causing an invalid_grant error (codes are single-use).
+    params = st.query_params
+    if "code" in params and "pending_code" not in st.session_state and "credentials" not in st.session_state:
+        st.session_state["pending_code"] = params["code"]
+        st.session_state["pending_state"] = params.get("state", "")
+        st.query_params.clear()
+        _dbg(f"Auth code captured from URL: {params['code'][:20]}…", config)
+
     cookie_manager = stx.CookieManager(key="gbp_cookie_mgr")
 
     # Restore credentials from persistent cookie when session is fresh
-    if "credentials" not in st.session_state:
+    if "credentials" not in st.session_state and "pending_code" not in st.session_state:
         saved = cookie_manager.get(_CREDENTIALS_COOKIE)
         if saved:
             st.session_state["credentials"] = saved
             _dbg("Restored credentials from browser cookie", config)
 
-    # Handle OAuth callback from Google redirect
-    params = st.query_params
-    if "code" in params and "credentials" not in st.session_state:
-        _dbg(
-            f"OAuth callback received — "
-            f"code={params['code'][:20]}… "
-            f"state={params.get('state', '')[:20]}…",
-            config,
-        )
+    # Exchange the pending code (popped so it can never be submitted twice)
+    if "pending_code" in st.session_state and "credentials" not in st.session_state:
+        code = st.session_state.pop("pending_code")
+        state = st.session_state.pop("pending_state", "")
+        _dbg(f"Exchanging auth code… state={state[:20]}…", config)
         try:
-            creds_json = exchange_code(params["code"], params.get("state", ""))
+            creds_json = exchange_code(code, state)
             st.session_state["credentials"] = creds_json
             cookie_manager.set(
                 _CREDENTIALS_COOKIE,
@@ -216,14 +223,12 @@ def main() -> None:
                 expires_at=datetime.now() + timedelta(days=_COOKIE_DAYS),
             )
             _dbg("Token exchange successful — credentials saved to session and cookie", config)
-            st.query_params.clear()
-            st.rerun()  # Only reached on success
+            st.rerun()
         except Exception as exc:
             st.error(f"Authentication failed: {exc}")
             if config.get("debug_mode"):
                 st.exception(exc)
-            st.query_params.clear()
-            # No rerun — let the user see the error before going back to login
+            # No rerun — let the user see the error
 
     if "credentials" not in st.session_state:
         show_login(config)
