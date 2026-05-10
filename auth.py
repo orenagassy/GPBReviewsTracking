@@ -1,5 +1,9 @@
+import base64
+import hashlib
 import json
+import os
 import streamlit as st
+from pathlib import Path
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -10,6 +14,11 @@ SCOPES = [
     "email",
     "profile",
 ]
+
+# PKCE verifier is written here by get_auth_url() and consumed by exchange_code().
+# Must survive the browser round-trip to Google (session_state is reset on redirect),
+# so a file is used instead of session_state. Gitignored.
+_PKCE_FILE = Path(".streamlit") / "pkce_verifier.txt"
 
 
 def _client_config() -> dict:
@@ -24,13 +33,29 @@ def _client_config() -> dict:
     }
 
 
+def _make_verifier() -> str:
+    return base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip("=")
+
+
+def _make_challenge(verifier: str) -> str:
+    return base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode()).digest()
+    ).decode().rstrip("=")
+
+
 def get_auth_url() -> str:
     flow = Flow.from_client_config(_client_config(), scopes=SCOPES)
     flow.redirect_uri = st.secrets["google"]["redirect_uri"]
+
+    verifier = _make_verifier()
+    _PKCE_FILE.write_text(verifier, encoding="utf-8")
+
     auth_url, state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
+        code_challenge=_make_challenge(verifier),
+        code_challenge_method="S256",
     )
     st.session_state["oauth_state"] = state
     return auth_url
@@ -43,12 +68,15 @@ def exchange_code(code: str, state: str) -> str:
         raise ValueError(
             f"OAuth state mismatch — stored={stored_state!r}, received={state!r}"
         )
-    # Do not pass state= to Flow; we validate it above. Passing it triggers an
-    # internal requests-oauthlib check that fails when session_state is fresh
-    # after a page reload from Google's redirect.
+
+    verifier = None
+    if _PKCE_FILE.exists():
+        verifier = _PKCE_FILE.read_text(encoding="utf-8").strip()
+        _PKCE_FILE.unlink(missing_ok=True)
+
     flow = Flow.from_client_config(_client_config(), scopes=SCOPES)
     flow.redirect_uri = st.secrets["google"]["redirect_uri"]
-    flow.fetch_token(code=code)
+    flow.fetch_token(code=code, code_verifier=verifier)
     return flow.credentials.to_json()
 
 

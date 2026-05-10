@@ -1,5 +1,6 @@
 .streamlit/secrets.toml
 .streamlit/cached_creds.json
+.streamlit/pkce_verifier.txt
 secrets.yaml
 __pycache__/
 *.pyc
