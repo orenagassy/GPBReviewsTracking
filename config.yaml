@@ -1,0 +1,13 @@
+report:
+  default_months_back: 2
+  max_months_back: 24
+  page_size: 50
+
+charts:
+  bar_color: "#4A90E2"
+  line_color: "#E24A4A"
+
+ui:
+  app_title: "GBP Reviews Tracker"
+  app_icon: "⭐"
+  signin_message: "Sign in with your Google account to view review analytics for your Google Business Profile locations."
