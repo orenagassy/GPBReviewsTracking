@@ -1,7 +1,7 @@
 import yaml
 import streamlit as st
 import plotly.graph_objects as go
-import extra_streamlit_components as stx
+from pathlib import Path
 from datetime import date, datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
@@ -9,8 +9,9 @@ from auth import get_auth_url, exchange_code
 from gbp_api import get_accounts, get_locations, get_reviews
 from report import build_weekly_report
 
-_CREDENTIALS_COOKIE = "gbp_creds"
-_COOKIE_DAYS = 30
+# Credentials are cached here between page reloads.
+# Gitignored — never committed.
+_CREDS_FILE = Path(".streamlit") / "cached_creds.json"
 
 
 @st.cache_data
@@ -24,13 +25,31 @@ def _dbg(msg: str, config: dict) -> None:
         st.info(f"🔍 {msg}")
 
 
+def _save_creds(creds_json: str) -> None:
+    _CREDS_FILE.write_text(creds_json, encoding="utf-8")
+
+
+def _load_creds() -> str | None:
+    try:
+        return _CREDS_FILE.read_text(encoding="utf-8") if _CREDS_FILE.exists() else None
+    except OSError:
+        return None
+
+
+def _clear_creds() -> None:
+    try:
+        _CREDS_FILE.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def show_login(config: dict) -> None:
     st.title(config["ui"]["app_title"])
     st.write(config["ui"]["signin_message"])
     st.link_button("Sign in with Google", get_auth_url(), type="primary")
 
 
-def show_report(config: dict, cookie_manager) -> None:
+def show_report(config: dict) -> None:
     cfg_report = config["report"]
     cfg_charts = config["charts"]
 
@@ -47,11 +66,8 @@ def show_report(config: dict, cookie_manager) -> None:
         )
         st.divider()
         if st.button("Sign out"):
-            cookie_manager.delete(_CREDENTIALS_COOKIE)
+            _clear_creds()
             st.session_state.clear()
-            # Prevent the cookie restore from immediately re-logging in
-            # during this rerun while the async JS delete may not have landed yet.
-            st.session_state["_signed_out"] = True
             st.rerun()
 
     if "accounts" not in st.session_state:
@@ -59,6 +75,7 @@ def show_report(config: dict, cookie_manager) -> None:
             try:
                 accounts, creds_json = get_accounts(st.session_state["credentials"])
                 st.session_state["credentials"] = creds_json
+                _save_creds(creds_json)
                 st.session_state["accounts"] = accounts
             except Exception as exc:
                 st.error(f"Failed to load accounts: {exc}")
@@ -83,6 +100,7 @@ def show_report(config: dict, cookie_manager) -> None:
                     st.session_state["credentials"], selected_account
                 )
                 st.session_state["credentials"] = creds_json
+                _save_creds(creds_json)
                 st.session_state[location_key] = locations
             except Exception as exc:
                 st.error(f"Failed to load locations: {exc}")
@@ -111,6 +129,7 @@ def show_report(config: dict, cookie_manager) -> None:
                     page_size=cfg_report["page_size"],
                 )
                 st.session_state["credentials"] = creds_json
+                _save_creds(creds_json)
             except Exception as exc:
                 st.error(f"Failed to fetch reviews: {exc}")
                 if config.get("debug_mode"):
@@ -192,65 +211,54 @@ def main() -> None:
         layout="wide",
     )
 
-    # Capture auth code into local vars and clear the URL BEFORE any component
-    # initialises. CookieManager triggers a Streamlit rerender; if ?code= is
-    # still in the URL during that rerender it would be submitted to Google a
-    # second time, causing invalid_grant (codes are single-use).
-    # Must capture to local vars BEFORE st.query_params.clear() — the params
-    # object is a live proxy and is empty after clear().
+    # ── Step 1: capture auth code from URL ─────────────────────────────────────
+    # Must happen before ANYTHING else — including st.info/st.error calls —
+    # so that Streamlit's own rerenders don't find the code again and
+    # attempt a second exchange (codes are single-use → invalid_grant).
     params = st.query_params
     if "code" in params and "pending_code" not in st.session_state and "credentials" not in st.session_state:
+        # Capture to locals BEFORE clearing — params is a live proxy, empty after clear()
         captured_code = params["code"]
         captured_state = params.get("state", "")
         st.query_params.clear()
         st.session_state["pending_code"] = captured_code
         st.session_state["pending_state"] = captured_state
-        _dbg(f"Auth code captured from URL: {captured_code[:20]}…", config)
 
-    cookie_manager = stx.CookieManager(key="gbp_cookie_mgr")
-
-    # Restore credentials from persistent cookie when session is fresh.
-    # Skipped when the user just signed out (_signed_out flag) to prevent
-    # restoring before the async cookie-delete JS has landed in the browser.
-    if (
-        "credentials" not in st.session_state
-        and "pending_code" not in st.session_state
-        and not st.session_state.get("_signed_out")
-    ):
-        saved = cookie_manager.get(_CREDENTIALS_COOKIE)
+    # ── Step 2: restore from file cache on fresh page load ─────────────────────
+    if "credentials" not in st.session_state and "pending_code" not in st.session_state:
+        saved = _load_creds()
         if saved:
             st.session_state["credentials"] = saved
-            _dbg("Restored credentials from browser cookie", config)
+            _dbg("Restored credentials from cached file", config)
 
-    # Clear the sign-out guard after one render (by this point the browser
-    # cookie delete has landed, so future page loads can restore normally).
-    st.session_state.pop("_signed_out", None)
-
-    # Exchange the pending code — popped so it can never be submitted twice.
+    # ── Step 3: exchange pending auth code ─────────────────────────────────────
     if "pending_code" in st.session_state and "credentials" not in st.session_state:
         code = st.session_state.pop("pending_code")
         state = st.session_state.pop("pending_state", "")
-        _dbg(f"Exchanging auth code… state={state[:20]}…", config)
+        _dbg(f"Exchanging auth code: {code[:20]}…", config)
         try:
             creds_json = exchange_code(code, state)
             st.session_state["credentials"] = creds_json
-            cookie_manager.set(
-                _CREDENTIALS_COOKIE,
-                creds_json,
-                expires_at=datetime.now() + timedelta(days=_COOKIE_DAYS),
-            )
-            _dbg("Token exchange successful — credentials saved to session and cookie", config)
+            _save_creds(creds_json)
+            _dbg("✅ Token exchange successful — you are now signed in", config)
             st.rerun()
         except Exception as exc:
-            st.error(f"Authentication failed: {exc}")
-            if config.get("debug_mode"):
-                st.exception(exc)
-            # No rerun — keep the error visible
+            # Store error in session_state so it survives any subsequent rerenders
+            st.session_state["_auth_error"] = str(exc)
 
+    # Show persistent auth error (stored in session_state, not lost on rerender)
+    if "_auth_error" in st.session_state:
+        st.error(f"Authentication failed: {st.session_state['_auth_error']}")
+        if config.get("debug_mode"):
+            st.warning("Try clicking 'Sign in with Google' again. If the error persists, check that your redirect_uri in secrets.toml matches the GCP OAuth credentials exactly.")
+        # Clear after display so re-login attempt starts fresh
+        del st.session_state["_auth_error"]
+
+    # ── Step 4: route to login or report ───────────────────────────────────────
     if "credentials" not in st.session_state:
         show_login(config)
     else:
-        show_report(config, cookie_manager)
+        show_report(config)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 .streamlit/secrets.toml
+.streamlit/cached_creds.json
 secrets.yaml
 __pycache__/
 *.pyc
