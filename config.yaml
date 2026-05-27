@@ -2,6 +2,7 @@ report:
   default_months_back: 2
   max_months_back: 24
   page_size: 50
+  max_review_pages: 20
 
 charts:
   bar_color: "#4A90E2"
@@ -12,5 +13,5 @@ ui:
   app_icon: "⭐"
   signin_message: "Sign in with your Google account to view review analytics for your Google Business Profile locations."
 
-# Set to false before sharing the app with others
+# Set to true only for local debugging — never deploy with true
 debug_mode: true

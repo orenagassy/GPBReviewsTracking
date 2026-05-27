@@ -1,3 +1,5 @@
+import os
+import logging
 import yaml
 import streamlit as st
 from pathlib import Path
@@ -8,9 +10,8 @@ from auth import get_auth_url, exchange_code
 from gbp_api import get_accounts, get_locations, get_reviews
 from report import build_weekly_report
 
-# Credentials are cached here between page reloads.
-# Gitignored — never committed.
 _CREDS_FILE = Path(".streamlit") / "cached_creds.json"
+_log = logging.getLogger(__name__)
 
 
 @st.cache_data
@@ -19,8 +20,12 @@ def load_config() -> dict:
         return yaml.safe_load(f)
 
 
+def _debug(config: dict) -> bool:
+    return bool(config.get("debug_mode"))
+
+
 def _dbg(msg: str, config: dict) -> None:
-    if config.get("debug_mode"):
+    if _debug(config):
         st.info(f"🔍 {msg}")
 
 
@@ -31,6 +36,10 @@ def _save_creds(creds_json: str) -> None:
     except OSError:
         pass
     _CREDS_FILE.write_text(creds_json, encoding="utf-8")
+    try:
+        os.chmod(_CREDS_FILE, 0o600)
+    except OSError:
+        pass
 
 
 def _load_creds() -> str | None:
@@ -42,6 +51,41 @@ def _load_creds() -> str | None:
 
 def _clear_creds() -> None:
     _CREDS_FILE.unlink(missing_ok=True)
+
+
+_STAR_INT = {"ONE": 1, "TWO": 2, "THREE": 3, "FOUR": 4, "FIVE": 5}
+
+
+def _generate_insights(low_reviews: list[dict], api_key: str) -> str:
+    import anthropic
+
+    lines = []
+    for r in low_reviews[:60]:
+        stars = _STAR_INT.get(r.get("starRating", ""), "?")
+        comment = (r.get("comment") or "").strip()
+        if comment:
+            lines.append(f"[{stars} stars] {comment}")
+
+    if not lines:
+        return f"{len(low_reviews)} low-rated review(s) found, but none contained written comments."
+
+    prompt = (
+        f"Below are {len(lines)} customer reviews for a business, each rated 3 stars or below.\n\n"
+        + "\n".join(lines)
+        + "\n\nWrite a concise insight summary (150–200 words) for the business owner covering:\n"
+        "- Main recurring themes or complaints\n"
+        "- Specific issues customers mention\n"
+        "- Patterns worth acting on\n"
+        "Be direct and actionable. Do not add preamble."
+    )
+
+    client = anthropic.Anthropic(api_key=api_key)
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=400,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return msg.content[0].text
 
 
 def show_login(config: dict) -> None:
@@ -74,7 +118,7 @@ def show_report(config: dict) -> None:
 
     if "accounts_error" in st.session_state:
         st.error(st.session_state["accounts_error"])
-        if config.get("debug_mode"):
+        if _debug(config):
             st.info("If the error says quota_limit_value '0', your GCP project has zero quota for mybusinessaccountmanagement.googleapis.com — go to GCP Console → APIs & Services → Quotas and request an increase.")
         if st.button("Retry"):
             del st.session_state["accounts_error"]
@@ -89,10 +133,16 @@ def show_report(config: dict) -> None:
                 _save_creds(creds_json)
                 st.session_state["accounts"] = accounts
             except Exception as exc:
-                st.session_state["accounts_error"] = f"Failed to load accounts: {exc}"
+                _log.error("Failed to load accounts: %s", exc)
+                msg = "Failed to load accounts. Please try again."
+                if _debug(config):
+                    msg = f"Failed to load accounts: {exc}"
+                st.session_state["accounts_error"] = msg
                 st.rerun()
 
-    accounts = st.session_state["accounts"]
+    accounts = st.session_state.get("accounts")
+    if accounts is None:
+        return
     if not accounts:
         st.warning("No Google Business Profile accounts found for this Google account.")
         return
@@ -121,10 +171,16 @@ def show_report(config: dict) -> None:
                 _save_creds(creds_json)
                 st.session_state[location_key] = locations
             except Exception as exc:
-                st.session_state[location_error_key] = f"Failed to load locations: {exc}"
+                _log.error("Failed to load locations: %s", exc)
+                msg = "Failed to load locations. Please try again."
+                if _debug(config):
+                    msg = f"Failed to load locations: {exc}"
+                st.session_state[location_error_key] = msg
                 st.rerun()
 
-    locations = st.session_state[location_key]
+    locations = st.session_state.get(location_key)
+    if locations is None:
+        return
     if not locations:
         st.warning("No locations found for this account.")
         return
@@ -137,19 +193,29 @@ def show_report(config: dict) -> None:
         end_date = date.today()
         start_date = end_date - relativedelta(months=months_back)
 
+        full_location = (
+            f"{selected_account}/{selected_location}"
+            if selected_location.startswith("locations/")
+            else selected_location
+        )
+        _dbg(f"Fetching reviews for: {full_location}", config)
         with st.spinner("Fetching reviews…"):
             try:
                 reviews, creds_json = get_reviews(
                     st.session_state["credentials"],
-                    selected_location,
+                    full_location,
                     page_size=cfg_report["page_size"],
+                    max_pages=cfg_report["max_review_pages"],
                 )
                 st.session_state["credentials"] = creds_json
                 _save_creds(creds_json)
             except Exception as exc:
-                st.error(f"Failed to fetch reviews: {exc}")
-                if config.get("debug_mode"):
+                _log.error("Failed to fetch reviews: %s", exc)
+                if _debug(config):
+                    st.error(f"Failed to fetch reviews: {exc}")
                     st.exception(exc)
+                else:
+                    st.error("Failed to fetch reviews. Please try again.")
                 return
 
         _dbg(f"Fetched {len(reviews)} total reviews; filtering {start_date} → {end_date}", config)
@@ -163,60 +229,64 @@ def show_report(config: dict) -> None:
 
         overall_avg = df.loc[df["review_count"] > 0, "avg_rating"].mean()
 
+        st.caption(f"Period: {start_date.strftime('%b %d, %Y')} – {end_date.strftime('%b %d, %Y')}")
+
         k1, k2 = st.columns(2)
         k1.metric("Total Reviews", total_reviews)
         k2.metric("Overall Avg Rating", f"{overall_avg:.2f} ⭐")
 
         st.divider()
 
-        c1, c2 = st.columns(2)
-
-        with c1:
-            st.subheader("Weekly Review Count")
-            fig_bar = go.Figure(
-                go.Bar(
-                    x=df["week_start"],
-                    y=df["review_count"],
-                    marker_color=cfg_charts["bar_color"],
-                )
-            )
-            fig_bar.update_layout(
-                xaxis_title="Week (Monday)",
-                yaxis_title="# Reviews",
-                margin=dict(t=20, b=40),
-            )
-            st.plotly_chart(fig_bar, use_container_width=True)
-
-        with c2:
-            st.subheader("Weekly Average Rating")
-            fig_line = go.Figure(
-                go.Scatter(
-                    x=df["week_start"],
-                    y=df["avg_rating"],
-                    mode="lines+markers",
-                    line=dict(color=cfg_charts["line_color"], width=2),
-                    connectgaps=False,
-                )
-            )
-            fig_line.update_layout(
-                xaxis_title="Week (Monday)",
-                yaxis_title="Avg Rating",
-                yaxis=dict(range=[0.5, 5.5], tickvals=[1, 2, 3, 4, 5]),
-                margin=dict(t=20, b=40),
-            )
-            st.plotly_chart(fig_line, use_container_width=True)
-
-        st.subheader("Weekly Detail")
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "week_start": st.column_config.DateColumn("Week Starting", format="YYYY-MM-DD"),
-                "review_count": st.column_config.NumberColumn("# Reviews"),
-                "avg_rating": st.column_config.NumberColumn("Avg Rating", format="%.2f"),
-            },
+        from plotly.subplots import make_subplots
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        fig.add_trace(
+            go.Bar(
+                x=df["week_start"],
+                y=df["review_count"],
+                name="Review Count",
+                marker_color=cfg_charts["bar_color"],
+            ),
+            secondary_y=False,
         )
+        fig.add_trace(
+            go.Scatter(
+                x=df["week_start"],
+                y=df["avg_rating"],
+                name="Avg Rating",
+                mode="lines+markers",
+                line=dict(color=cfg_charts["line_color"], width=2),
+                connectgaps=False,
+            ),
+            secondary_y=True,
+        )
+        fig.update_layout(
+            xaxis_title="Week (Monday)",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(t=40, b=40),
+        )
+        fig.update_yaxes(title_text="# Reviews", secondary_y=False)
+        fig.update_yaxes(title_text="Avg Rating", range=[0.5, 5.5], tickvals=[1, 2, 3, 4, 5], secondary_y=True)
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.subheader("Insights: Reviews ≤ 3 Stars")
+        low_reviews = [r for r in reviews if r.get("starRating") in ("ONE", "TWO", "THREE")]
+        if not low_reviews:
+            st.info("No reviews with 3 stars or below in this period.")
+        else:
+            st.caption(f"{len(low_reviews)} low-rated review(s) in this period.")
+            anthropic_key = st.secrets.get("anthropic", {}).get("api_key")
+            if not anthropic_key:
+                st.warning("Add `[anthropic]\\napi_key = 'sk-ant-...'` to `.streamlit/secrets.toml` to enable AI insights.")
+            else:
+                with st.spinner("Analysing low-rated reviews…"):
+                    try:
+                        st.write(_generate_insights(low_reviews, anthropic_key))
+                    except Exception as exc:
+                        _log.error("Insights generation failed: %s", exc)
+                        if _debug(config):
+                            st.error(f"Insights generation failed: {exc}")
+                        else:
+                            st.error("Could not generate insights. Please try again.")
 
 
 def main() -> None:
@@ -248,23 +318,21 @@ def main() -> None:
     if "pending_code" in st.session_state and "credentials" not in st.session_state:
         code = st.session_state.pop("pending_code")
         state = st.session_state.pop("pending_state", "")
-        _dbg(f"Exchanging auth code: {code[:20]}…", config)
         try:
             creds_json = exchange_code(code, state)
             st.session_state["credentials"] = creds_json
             _save_creds(creds_json)
-            _dbg("✅ Token exchange successful — you are now signed in", config)
+            _dbg("Token exchange successful", config)
             st.rerun()
         except Exception as exc:
             # Store error in session_state so it survives any subsequent rerenders
+            _log.error("Token exchange failed: %s", exc)
             st.session_state["_auth_error"] = str(exc)
 
-    # Show persistent auth error (stored in session_state, not lost on rerender)
     if "_auth_error" in st.session_state:
         st.error(f"Authentication failed: {st.session_state['_auth_error']}")
-        if config.get("debug_mode"):
+        if _debug(config):
             st.warning("Try clicking 'Sign in with Google' again. If the error persists, check that your redirect_uri in secrets.toml matches the GCP OAuth credentials exactly.")
-        # Clear after display so re-login attempt starts fresh
         del st.session_state["_auth_error"]
 
     if "credentials" not in st.session_state:

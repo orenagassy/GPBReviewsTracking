@@ -34,10 +34,8 @@ Validate at API response boundaries. Use `.get()` with defaults. Check for empty
 | Endpoint | GCP API to enable | Purpose |
 |---|---|---|
 | `GET https://mybusinessaccountmanagement.googleapis.com/v1/accounts` | My Business Account Management API | List GBP accounts |
-| `GET https://mybusinessaccountmanagement.googleapis.com/v1/{account}/locations` | My Business Account Management API | List locations |
-| `GET https://mybusinessreviews.googleapis.com/v1/{location}/reviews` | Google Business Profile API | Fetch reviews (paginated) |
-
-> The reviews endpoint is served by `mybusinessreviews.googleapis.com` but is enabled via the umbrella **Google Business Profile API** in GCP — there is no separately-listed "My Business Reviews API".
+| `GET https://mybusinessaccountmanagement.googleapis.com/v1/{account}/locations?readMask=name,title` | My Business Business Information API (`mybusinessbusinessinformation.googleapis.com`) | List locations — `readMask` is required |
+| `GET https://mybusiness.googleapis.com/v4/{location}/reviews` | Google My Business API (`mybusiness.googleapis.com`) — reviews were never migrated off v4 | Fetch reviews (paginated) |
 
 OAuth scope required: `https://www.googleapis.com/auth/business.manage`
 
